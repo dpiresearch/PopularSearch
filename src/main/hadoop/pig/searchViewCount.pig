@@ -29,7 +29,7 @@ F1 = LOAD '$inputdir/search_results/$daydate/*/search_results.log*' USING PigSto
 --
 V1 = LOAD '$inputdir/viewad/$daydate/*/viewed_ad.log*' USING PigStorage('\u0001') as (version:int,time:long,site:long,adid:long,macid:chararray,usrid:long,catid:long,locid:long,ip:chararray,ua:chararray, referer:chararray, nativereferer:int, country:chararray, language:chararray);
 
--- Don't project ip yet
+-- Project what we need from the views
 SV1 = FOREACH V1 GENERATE time, country, adid, macid, catid, locid;
 
 
@@ -52,11 +52,8 @@ CAT_LOC_TOK = FILTER CAT_LOC_TOK by (kw != 'EMPTY' AND kw != '');
 -- Filter out empty cookie strings
 CAT_LOC_TOK = FILTER CAT_LOC_TOK by (macid != 'EMPTY' AND macid != '' AND macid != 'UNKNOWN');
 
--- remove cookie that skews data
-CAT_LOC_TOK = FILTER CAT_LOC_TOK by (macid != '3b812842-2930-4c1e-93c4-ef5a7094432c');
-CAT_LOC_TOK = FILTER CAT_LOC_TOK by (macid != '5okictcplqj7pno3r7p425m4u4');
-
 -- Get only clicks from within the website
+-- Native referer is recorded at collection time
 CAT_LOC_TOK = FILTER CAT_LOC_TOK by (nativereferer == 1);
 
 -- sanity check - make sure we have a reasonable number of records
@@ -71,46 +68,17 @@ SV1 = FILTER SV1 by (macid != 'EMPTY' AND macid != '' AND macid != 'UNKNOWN');
 -- END Filters for test
 -- *********************
 
---
--- Load the location id-name
---
-LOCREF_MX = LOAD '/apps/hdmi-finance/kijiji/bolt/data/ref/geo_tz.csv' USING PigStorage('|') as (id:long,name:chararray);
-LOCREF_CATEX = LOAD '/apps/hdmi-finance/kijiji/bolt/data/ref/geo_tz_us.csv' USING PigStorage('|') as (id:long,name:chararray);
-
-LMX = FOREACH LOCREF_MX GENERATE id as id, name as name;
-LMUS = FOREACH LOCREF_CATEX GENERATE id as id, name as name;
-
-ALL_LOC = UNION LMX, LMUS;
-
--- DESCRIBE LMX;
--- DESCRIBE LMUS;
-
---
--- Load the category id and names
---
-CATREF = LOAD '/apps/hdmi-finance/kijiji/bolt/data/ref/cat_all.csv' USING PigStorage('|') as (id:long,name:chararray);
-ALL_CAT = FOREACH CATREF GENERATE id as id, name as name;
-
---
--- To prevent the same view from being matched with multiple searches, 
--- project the timestamp of the view into the matched relation and make sure it's distinct.
---
-
 -- 
 -- To get search-view impressions within X minutes
 -- project both timestamps to the relation and make sure viewtime - searchtime < X minutes
--- TODO:  Need to figure out if the referer on the view will be a better way
+-- Use skewed because we'll always have more searches than views
 -- 
 SVJ = JOIN SV1 by macid, CAT_LOC_TOK by macid USING 'skewed';
 
 --
--- Make the search-view line unique by search time, keyword, and adid
---
-
---
 -- Project out the fields needed to get the keywords, search and view times, location and category of the ad clicked, the ad, and the search term used
 --
-SVJF = FOREACH SVJ GENERATE CAT_LOC_TOK::country as country, CAT_LOC_TOK::time as searchtime, SV1::time as viewtime, SV1::catid as view_catid, SV1::locid as view_locid, CAT_LOC_TOK::kw as kw, com.ebay.ecg.bolt.bigdata.pig.udf.FindAdidInSearch((chararray) SV1::adid, (chararray) CAT_LOC_TOK::searchstr) as searchit, SV1::adid as adid;
+SVJF = FOREACH SVJ GENERATE CAT_LOC_TOK::country as country, CAT_LOC_TOK::time as searchtime, SV1::time as viewtime, SV1::catid as view_catid, SV1::locid as view_locid, CAT_LOC_TOK::kw as kw, com.co.udf.FindAdidInSearch((chararray) SV1::adid, (chararray) CAT_LOC_TOK::searchstr) as searchit, SV1::adid as adid;
 
 
 -- filter out search-view pairs that don't match on adid
